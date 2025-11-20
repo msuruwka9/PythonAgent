@@ -7,7 +7,7 @@ INSTALL_DIR="/opt/logmaster-agent"
 STATE_DIR="/var/lib/logmaster-agent"
 LOG_DIR="/var/log/logmaster-agent"
 SERVICE_FILE="/etc/systemd/system/logmaster-agent.service"
-DEFAULT_AGENT_BASE="https://raw.githubusercontent.com/yourusername/log-master-agent/main/PythonAgent"
+DEFAULT_AGENT_BASE="https://raw.githubusercontent.com/msuruwka9/PythonAgent/main"
 PYTHON_BIN="/usr/bin/python3"
 
 log() {
@@ -19,7 +19,7 @@ usage() {
 Usage: install.sh <ServerGuid> <ApiUrl> [AgentSourceBase]
 
 Example:
-  curl -sfL https://raw.githubusercontent.com/yourusername/log-master-agent/main/PythonAgent/install.sh | \
+  curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/main/install.sh | \
     sudo bash -s -- 00000000-0000-0000-0000-000000000000 https://logmaster.example.com
 USAGE
 }
