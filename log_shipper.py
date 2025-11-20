@@ -71,12 +71,37 @@ class EveLogHandler(FileSystemEventHandler):
             self.process_new_lines()
 
 
-def ship_batch(events: list[dict[str, Any]], endpoint: str, retries: int = 3) -> None:
+def ship_batch(events: list[dict[str, Any]], endpoint: str, retries: int = 3, max_size_mb: int = 200) -> None:
+    """Ship batch with size limit and automatic splitting if needed."""
     if not events:
         return
 
+    # Check uncompressed size first
     payload = json.dumps(events).encode("utf-8")
+    uncompressed_size_mb = len(payload) / (1024 * 1024)
+    
+    # If batch is too large, split it recursively
+    if uncompressed_size_mb > max_size_mb:
+        mid = len(events) // 2
+        LOGGER.warning(
+            "Batch too large (%.2f MB uncompressed), splitting %s events into two batches",
+            uncompressed_size_mb,
+            len(events),
+        )
+        ship_batch(events[:mid], endpoint, retries, max_size_mb)
+        ship_batch(events[mid:], endpoint, retries, max_size_mb)
+        return
+
     compressed = gzip.compress(payload)
+    compressed_size_mb = len(compressed) / (1024 * 1024)
+    
+    LOGGER.debug(
+        "Shipping batch: %s events, %.2f MB uncompressed, %.2f MB compressed (%.1f%% ratio)",
+        len(events),
+        uncompressed_size_mb,
+        compressed_size_mb,
+        (compressed_size_mb / uncompressed_size_mb * 100) if uncompressed_size_mb > 0 else 0,
+    )
 
     for attempt in range(1, retries + 1):
         try:
@@ -87,10 +112,10 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, retries: int = 3) ->
                     "Content-Type": "application/json",
                     "Content-Encoding": "gzip",
                 },
-                timeout=30,
+                timeout=60,  # Increased timeout for large batches
             )
             response.raise_for_status()
-            LOGGER.info("Uploaded %s events", len(events))
+            LOGGER.info("Uploaded %s events (%.2f MB compressed)", len(events), compressed_size_mb)
             return
         except requests.RequestException as exc:
             LOGGER.warning("Failed to upload events (attempt %s/%s): %s", attempt, retries, exc)
@@ -106,18 +131,34 @@ def worker_loop(event_queue: "queue.Queue[dict[str, Any]]",
                 stop_event: threading.Event) -> None:
     buffer: list[dict[str, Any]] = []
     last_flush = time.monotonic()
+    estimated_buffer_size = 0  # Track approximate size in bytes
+    max_buffer_size_mb = 150  # Start flushing earlier to avoid 200MB limit
 
     while not stop_event.is_set():
         try:
             item = event_queue.get(timeout=1)
             buffer.append(item)
+            # Rough estimate: JSON serialized size
+            estimated_buffer_size += len(json.dumps(item))
         except queue.Empty:
             pass
 
-        should_flush = len(buffer) >= batch_size or (buffer and (time.monotonic() - last_flush) >= flush_interval)
+        buffer_size_mb = estimated_buffer_size / (1024 * 1024)
+        time_since_flush = time.monotonic() - last_flush
+        
+        # Flush if: count limit OR size limit OR time limit
+        should_flush = (
+            len(buffer) >= batch_size
+            or buffer_size_mb >= max_buffer_size_mb
+            or (buffer and time_since_flush >= flush_interval)
+        )
+        
         if should_flush:
+            if buffer_size_mb >= max_buffer_size_mb:
+                LOGGER.debug("Flushing early due to size: %.2f MB estimated", buffer_size_mb)
             ship_batch(buffer, endpoint)
             buffer.clear()
+            estimated_buffer_size = 0
             last_flush = time.monotonic()
 
     if buffer:
