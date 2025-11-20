@@ -19,7 +19,7 @@ usage() {
 Usage: install.sh <ServerGuid> <ApiUrl> [AgentSourceBase]
 
 Example:
-  curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/main/install.sh | \
+  curl -sfL https://raw.githubusercontent.com/yourusername/log-master-agent/main/PythonAgent/install.sh | \
     sudo bash -s -- 00000000-0000-0000-0000-000000000000 https://logmaster.example.com
 USAGE
 }
@@ -47,7 +47,29 @@ install_dependencies() {
   apt-get update -y
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv curl wget ca-certificates gzip tar \
-    jq coreutils systemd
+    jq coreutils systemd suricata suricata-update
+}
+
+install_suricata() {
+  log "Configuring Suricata"
+  if systemctl is-active --quiet suricata; then
+    log "Suricata already running, skipping configuration"
+    return
+  fi
+  
+  # Enable and start Suricata
+  systemctl enable suricata
+  systemctl start suricata
+  
+  log "Suricata installed and started"
+}
+
+setup_sudoers() {
+  log "Configuring sudoers for agent"
+  cat <<'SUDOERS' > /etc/sudoers.d/logmaster-agent
+logmaster-agent ALL=(ALL) NOPASSWD:/usr/bin/apt-get,/usr/bin/apt,/usr/bin/systemctl,/usr/bin/suricata-update,/usr/bin/suricata
+SUDOERS
+  chmod 440 /etc/sudoers.d/logmaster-agent
 }
 
 create_user_and_dirs() {
@@ -131,6 +153,8 @@ main() {
 
   install_dependencies
   create_user_and_dirs
+  install_suricata
+  setup_sudoers
   fetch_agent_files "${agent_base}"
   render_config "${server_guid}" "${api_url}"
   install_python_dependencies
