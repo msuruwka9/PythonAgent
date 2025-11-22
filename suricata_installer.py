@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import platform
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -61,34 +62,64 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
                        eve_path: str = "/var/log/suricata/eve.json") -> None:
     LOGGER.info("Configuring Suricata logging (%s)", config_path)
     config_file = Path(config_path)
+    
+    # If config doesn't exist, download the default template
     if not config_file.exists():
-        raise FileNotFoundError(config_path)
+        LOGGER.warning("Suricata config not found, downloading default template...")
+        try:
+            import urllib.request
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Try to download from official Suricata repository
+            template_url = "https://raw.githubusercontent.com/OISF/suricata/suricata-6.0.4/suricata.yaml.in"
+            LOGGER.info("Downloading config template from %s", template_url)
+            
+            with urllib.request.urlopen(template_url, timeout=30) as response:
+                template_content = response.read().decode('utf-8')
+            
+            # Replace template variables with actual values
+            template_content = template_content.replace("@e_enable_evelog@", "yes")
+            template_content = template_content.replace("@e_default_log_dir@", "/var/log/suricata")
+            template_content = template_content.replace("@e_runmode@", "autofp")
+            
+            config_file.write_text(template_content, encoding="utf-8")
+            LOGGER.info("Config template downloaded and saved successfully")
+            
+        except Exception as exc:
+            LOGGER.error("Failed to download config template: %s", exc)
+            raise RuntimeError(f"Cannot create Suricata config: {exc}") from exc
 
     content = config_file.read_text(encoding="utf-8")
     
     # Update default-rule-path to use suricata-update managed rules
     if "default-rule-path:" in content:
-        content = content.replace(
-            "default-rule-path: /etc/suricata/rules",
-            "default-rule-path: /var/lib/suricata/rules"
+        # Replace any existing rule path with the suricata-update managed path
+        import re
+        content = re.sub(
+            r'default-rule-path:\s*.*',
+            'default-rule-path: /var/lib/suricata/rules',
+            content
         )
         LOGGER.info("Updated rule path to /var/lib/suricata/rules")
     
-    if "eve-log" not in content:
-        content += (
-            "\noutputs:\n"
-            "  - eve-log:\n"
-            "      enabled: yes\n"
-            "      filetype: regular\n"
-            f"      filename: {eve_path}\n"
-            "      types:\n"
-            "        - alert\n"
-            "        - http\n"
-            "        - dns\n"
-            "        - flow\n"
-            "        - tls\n"
+    # Enable EVE JSON logging if not already configured
+    if "enabled: yes" not in content or "eve-log:" not in content:
+        # Replace template variables that might still exist
+        content = content.replace("@e_enable_evelog@", "yes")
+        content = content.replace("enabled: @e_enable_evelog@", "enabled: yes")
+        LOGGER.info("Enabled EVE JSON logging")
+    
+    # Ensure output file path is correct
+    if eve_path not in content:
+        content = re.sub(
+            r'filename:\s*eve\.json',
+            f'filename: {eve_path}',
+            content
         )
+        LOGGER.info("Set EVE log path to %s", eve_path)
+    
     config_file.write_text(content, encoding="utf-8")
+    LOGGER.info("Suricata configuration completed successfully")
 
 
 def enable_community_rules() -> None:
