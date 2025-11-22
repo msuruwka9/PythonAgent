@@ -88,18 +88,33 @@ def orchestrate_installation(config: dict[str, Any]) -> str:
             return "AgentInstalled"
 
         send_heartbeat(config, SuricataInstallationStatus.CONFIGURING, "Starting Suricata installation")
+        
+        LOGGER.info("Detecting distribution...")
         distro = detect_distro()
+        LOGGER.info("Detected distribution: %s", distro)
+        
+        LOGGER.info("Installing Suricata packages...")
         install_suricata(distro)
+        
+        LOGGER.info("Configuring Suricata...")
         configure_suricata(
             config["suricata"].get("config_path", "/etc/suricata/suricata.yaml"),
             config["suricata"].get("eve_log_path", "/var/log/suricata/eve.json"),
         )
+        
+        LOGGER.info("Enabling community rules...")
         enable_community_rules()
+        
+        LOGGER.info("Starting Suricata service...")
         start_suricata(config["suricata"].get("service_name", "suricata"))
+        
         send_heartbeat(config, SuricataInstallationStatus.CONFIGURED, "Suricata configured successfully")
+        LOGGER.info("Suricata installation completed successfully")
         return SuricataInstallationStatus.CONFIGURED
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.exception("Suricata installation failed: %s", exc)
+        
+    except Exception as exc:
+        error_msg = f"Suricata installation failed: {exc}"
+        LOGGER.exception(error_msg)
         send_heartbeat(config, SuricataInstallationStatus.FAILED, str(exc))
         return SuricataInstallationStatus.FAILED
 

@@ -19,6 +19,75 @@ class SuricataInstallationStatus:
     FAILED = "SuricataFailed"
 
 
+def detect_network_interface() -> str:
+    """Detect the primary network interface for Suricata to monitor."""
+    try:
+        # Try to find default route interface
+        result = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5
+        )
+        # Parse output like: "default via 192.168.1.1 dev eth0 ..."
+        for line in result.stdout.split('\n'):
+            if 'default' in line and 'dev' in line:
+                parts = line.split()
+                if 'dev' in parts:
+                    dev_idx = parts.index('dev')
+                    if dev_idx + 1 < len(parts):
+                        interface = parts[dev_idx + 1]
+                        LOGGER.info("Detected primary network interface: %s", interface)
+                        return interface
+    except Exception as exc:
+        LOGGER.warning("Failed to detect interface via ip route: %s", exc)
+    
+    # Fallback: try common interface names
+    try:
+        result = subprocess.run(
+            ["ip", "link", "show"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5
+        )
+        # Look for UP interfaces that are not loopback
+        for line in result.stdout.split('\n'):
+            if 'state UP' in line or 'state UNKNOWN' in line:
+                # Parse line like: "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> ..."
+                match = re.search(r'\d+:\s+(\S+):', line)
+                if match:
+                    interface = match.group(1)
+                    if interface != 'lo' and not interface.startswith('docker'):
+                        LOGGER.info("Found active interface: %s", interface)
+                        return interface
+    except Exception as exc:
+        LOGGER.warning("Failed to detect interface via ip link: %s", exc)
+    
+    # Last resort: try common names
+    common_interfaces = ['eth0', 'ens33', 'ens3', 'enp0s3', 'eno1']
+    for iface in common_interfaces:
+        try:
+            result = subprocess.run(
+                ["ip", "link", "show", iface],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5
+            )
+            if result.returncode == 0:
+                LOGGER.info("Using fallback interface: %s", iface)
+                return iface
+        except Exception:
+            continue
+    
+    raise RuntimeError(
+        "Could not detect any network interface. "
+        "Please configure Suricata manually with 'af-packet.interface' setting."
+    )
+
+
 def detect_distro() -> str:
     """Return distro ID parsed from /etc/os-release."""
     if platform.system().lower() != "linux":
@@ -60,41 +129,55 @@ def install_suricata(distro: str) -> None:
 
 def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
                        eve_path: str = "/var/log/suricata/eve.json") -> None:
-    LOGGER.info("Configuring Suricata logging (%s)", config_path)
+    LOGGER.info("Configuring Suricata logging and network interface (%s)", config_path)
     config_file = Path(config_path)
     
-    # If config doesn't exist, download the default template
+    # Verify config exists (should exist after apt install)
     if not config_file.exists():
-        LOGGER.warning("Suricata config not found, downloading default template...")
-        try:
-            import urllib.request
-            config_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Try to download from official Suricata repository
-            template_url = "https://raw.githubusercontent.com/OISF/suricata/suricata-6.0.4/suricata.yaml.in"
-            LOGGER.info("Downloading config template from %s", template_url)
-            
-            with urllib.request.urlopen(template_url, timeout=30) as response:
-                template_content = response.read().decode('utf-8')
-            
-            # Replace template variables with actual values
-            template_content = template_content.replace("@e_enable_evelog@", "yes")
-            template_content = template_content.replace("@e_default_log_dir@", "/var/log/suricata")
-            template_content = template_content.replace("@e_runmode@", "autofp")
-            
-            config_file.write_text(template_content, encoding="utf-8")
-            LOGGER.info("Config template downloaded and saved successfully")
-            
-        except Exception as exc:
-            LOGGER.error("Failed to download config template: %s", exc)
-            raise RuntimeError(f"Cannot create Suricata config: {exc}") from exc
+        raise RuntimeError(
+            f"Suricata config not found at {config_path}. "
+            "Ensure 'apt-get install suricata' completed successfully."
+        )
 
     content = config_file.read_text(encoding="utf-8")
     
+    # Detect network interface
+    try:
+        interface = detect_network_interface()
+        LOGGER.info("Configuring Suricata to monitor interface: %s", interface)
+    except Exception as exc:
+        LOGGER.error("Failed to detect network interface: %s", exc)
+        raise
+
+    # Configure af-packet interface
+    # Look for af-packet section and update interface
+    af_packet_pattern = r'(af-packet:\s*\n(?:\s+-\s+interface:)[^\n]*)'
+    if re.search(r'af-packet:', content):
+        # Replace existing af-packet interface configuration
+        content = re.sub(
+            r'(\s+interface:\s+)\S+',
+            rf'\1{interface}',
+            content,
+            count=1
+        )
+        LOGGER.info("Updated af-packet interface to %s", interface)
+    else:
+        # If no af-packet section exists, add basic configuration
+        af_packet_config = f"""
+# LogMaster Agent: AF_PACKET configuration
+af-packet:
+  - interface: {interface}
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+"""
+        content += af_packet_config
+        LOGGER.info("Added af-packet configuration for %s", interface)
+    
     # Update default-rule-path to use suricata-update managed rules
     if "default-rule-path:" in content:
-        # Replace any existing rule path with the suricata-update managed path
-        import re
         content = re.sub(
             r'default-rule-path:\s*.*',
             'default-rule-path: /var/lib/suricata/rules',
@@ -102,23 +185,57 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
         )
         LOGGER.info("Updated rule path to /var/lib/suricata/rules")
     
-    # Enable EVE JSON logging if not already configured
-    if "enabled: yes" not in content or "eve-log:" not in content:
-        # Replace template variables that might still exist
-        content = content.replace("@e_enable_evelog@", "yes")
-        content = content.replace("enabled: @e_enable_evelog@", "enabled: yes")
+    # Ensure EVE JSON logging is enabled
+    # Look for eve-log section and ensure it's enabled
+    if re.search(r'eve-log:', content):
+        # Make sure enabled is set to yes
+        content = re.sub(
+            r'(eve-log:.*?enabled:\s*)\S+',
+            r'\1yes',
+            content,
+            flags=re.DOTALL
+        )
+        # Update filetype to regular if not set
+        if 'filetype:' not in content or re.search(r'filetype:\s*regular', content):
+            pass  # Already correct
+        else:
+            content = re.sub(
+                r'(eve-log:.*?filetype:\s*)\S+',
+                r'\1regular',
+                content,
+                flags=re.DOTALL
+            )
         LOGGER.info("Enabled EVE JSON logging")
     
-    # Ensure output file path is correct
-    if eve_path not in content:
-        content = re.sub(
-            r'filename:\s*eve\.json',
-            f'filename: {eve_path}',
-            content
-        )
-        LOGGER.info("Set EVE log path to %s", eve_path)
+    # Ensure log directory exists
+    eve_log_dir = Path(eve_path).parent
+    eve_log_dir.mkdir(parents=True, exist_ok=True)
+    LOGGER.info("Ensured EVE log directory exists: %s", eve_log_dir)
     
+    # Write updated configuration
     config_file.write_text(content, encoding="utf-8")
+    
+    # Set proper permissions for Suricata
+    try:
+        subprocess.run(
+            ["chmod", "644", str(config_file)],
+            check=True,
+            capture_output=True
+        )
+        # Ensure log directory is writable by suricata
+        subprocess.run(
+            ["chown", "-R", "root:root", str(eve_log_dir)],
+            check=True,
+            capture_output=True
+        )
+        subprocess.run(
+            ["chmod", "-R", "755", str(eve_log_dir)],
+            check=True,
+            capture_output=True
+        )
+    except subprocess.CalledProcessError as exc:
+        LOGGER.warning("Failed to set permissions: %s", exc)
+    
     LOGGER.info("Suricata configuration completed successfully")
 
 
@@ -139,5 +256,71 @@ def enable_community_rules() -> None:
 
 def start_suricata(service_name: str = "suricata") -> None:
     LOGGER.info("Starting Suricata service")
+    
+    # First, validate configuration
+    try:
+        LOGGER.info("Validating Suricata configuration...")
+        result = subprocess.run(
+            ["suricata", "-T", "-c", "/etc/suricata/suricata.yaml"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30
+        )
+        if result.returncode != 0:
+            LOGGER.error("Suricata configuration validation failed:")
+            LOGGER.error("STDOUT: %s", result.stdout)
+            LOGGER.error("STDERR: %s", result.stderr)
+            raise RuntimeError(f"Suricata configuration is invalid: {result.stderr}")
+        LOGGER.info("Suricata configuration is valid")
+    except subprocess.TimeoutExpired:
+        LOGGER.warning("Configuration validation timed out, continuing anyway...")
+    except FileNotFoundError:
+        LOGGER.warning("suricata binary not found in PATH, skipping validation")
+    
+    # Stop service if running
+    try:
+        subprocess.run(
+            ["systemctl", "stop", service_name],
+            capture_output=True,
+            check=False,
+            timeout=30
+        )
+    except Exception as exc:
+        LOGGER.debug("Error stopping service (may not be running): %s", exc)
+    
+    # Enable and start
     run_command(["systemctl", "enable", service_name])
-    run_command(["systemctl", "restart", service_name])
+    run_command(["systemctl", "start", service_name])
+    
+    # Wait a moment and verify it's running
+    import time
+    time.sleep(2)
+    
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", service_name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5
+        )
+        if result.returncode == 0 and "active" in result.stdout:
+            LOGGER.info("Suricata service started successfully")
+        else:
+            # Get status details
+            status_result = subprocess.run(
+                ["systemctl", "status", service_name],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5
+            )
+            LOGGER.error("Suricata service failed to start properly:")
+            LOGGER.error("Status: %s", status_result.stdout)
+            raise RuntimeError(f"Suricata service is not active: {status_result.stdout}")
+    except subprocess.TimeoutExpired:
+        LOGGER.warning("Service status check timed out")
+    except Exception as exc:
+        LOGGER.error("Failed to verify service status: %s", exc)
+        raise

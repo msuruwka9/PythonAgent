@@ -47,21 +47,23 @@ install_dependencies() {
   apt-get update -y
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv curl wget ca-certificates gzip tar \
-    jq coreutils systemd suricata suricata-update
+    jq coreutils systemd suricata suricata-update libcap2-bin iproute2
+  
+  # Set capabilities for Suricata to capture packets without root
+  log "Setting network capabilities for Suricata"
+  if command -v setcap >/dev/null 2>&1; then
+    setcap cap_net_raw,cap_net_admin=eip /usr/bin/suricata || \
+      log "Warning: Failed to set capabilities (will run as root)"
+  fi
 }
 
 install_suricata() {
-  log "Configuring Suricata"
-  if systemctl is-active --quiet suricata; then
-    log "Suricata already running, skipping configuration"
-    return
-  fi
+  log "Installing Suricata packages"
+  # Only install packages, don't start yet - agent will configure and start it
+  systemctl stop suricata 2>/dev/null || true
+  systemctl disable suricata 2>/dev/null || true
   
-  # Enable and start Suricata
-  systemctl enable suricata
-  systemctl start suricata
-  
-  log "Suricata installed and started"
+  log "Suricata packages installed (service not started yet)"
 }
 
 setup_sudoers() {
