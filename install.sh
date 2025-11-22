@@ -115,7 +115,7 @@ YAML
     log "Enabling EVE JSON logging"
     cat >> "$config_file" <<YAML
 
-# Added by LogMaster Agent installer  
+# Added by LogMaster Agent installer
 outputs:
   - eve-log:
       enabled: yes
