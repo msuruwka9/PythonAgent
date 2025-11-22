@@ -65,6 +65,15 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
         raise FileNotFoundError(config_path)
 
     content = config_file.read_text(encoding="utf-8")
+    
+    # Update default-rule-path to use suricata-update managed rules
+    if "default-rule-path:" in content:
+        content = content.replace(
+            "default-rule-path: /etc/suricata/rules",
+            "default-rule-path: /var/lib/suricata/rules"
+        )
+        LOGGER.info("Updated rule path to /var/lib/suricata/rules")
+    
     if "eve-log" not in content:
         content += (
             "\noutputs:\n"
@@ -76,14 +85,25 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
             "        - alert\n"
             "        - http\n"
             "        - dns\n"
+            "        - flow\n"
+            "        - tls\n"
         )
     config_file.write_text(content, encoding="utf-8")
 
 
 def enable_community_rules() -> None:
-    LOGGER.info("Updating Suricata community rules")
-    run_command(["suricata-update", "update-sources"])
-    run_command(["suricata-update"])
+    LOGGER.info("Updating Suricata community rules and enabling ET Open")
+    try:
+        # Update sources list
+        run_command(["suricata-update", "update-sources"])
+        # Enable ET/Open ruleset explicitly
+        run_command(["suricata-update", "enable-source", "et/open"])
+        # Update and download rules
+        run_command(["suricata-update"])
+        LOGGER.info("ET Open rules successfully installed and enabled")
+    except subprocess.CalledProcessError as exc:
+        LOGGER.error("Failed to enable ET Open rules: %s", exc)
+        raise
 
 
 def start_suricata(service_name: str = "suricata") -> None:

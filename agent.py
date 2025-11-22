@@ -80,13 +80,13 @@ def orchestrate_installation(config: dict[str, Any]) -> str:
             LOGGER.info("Suricata is already active, skipping installation")
             send_heartbeat(config, SuricataInstallationStatus.CONFIGURED, "Suricata already configured")
             return SuricataInstallationStatus.CONFIGURED
-        
+
         # Check if auto_install is disabled in config
         if not config.get("suricata", {}).get("auto_install", True):
             LOGGER.warning("Suricata not running and auto_install=false, sending AgentInstalled status")
             send_heartbeat(config, "AgentInstalled", "Suricata auto-install disabled")
             return "AgentInstalled"
-        
+
         send_heartbeat(config, SuricataInstallationStatus.CONFIGURING, "Starting Suricata installation")
         distro = detect_distro()
         install_suricata(distro)
@@ -124,7 +124,7 @@ def main() -> None:
 
     config = load_config(config_path)
     install_status = orchestrate_installation(config)
-    
+
     # Continue monitoring even if installation was skipped or partial
     if install_status == SuricataInstallationStatus.FAILED:
         LOGGER.error("Installation failed, exiting")
