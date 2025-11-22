@@ -50,18 +50,152 @@ install_dependencies() {
     jq coreutils systemd suricata suricata-update
 }
 
-install_suricata() {
-  log "Configuring Suricata"
-  if systemctl is-active --quiet suricata; then
-    log "Suricata already running, skipping configuration"
-    return
+get_default_interface() {
+  # Try to detect default network interface
+  local iface
+  iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+  
+  if [[ -z "$iface" ]]; then
+    # Fallback to common interface names
+    for candidate in eth0 ens33 enp0s3 ens160 ens192 enp1s0; do
+      if ip link show "$candidate" &>/dev/null; then
+        iface="$candidate"
+        break
+      fi
+    done
   fi
   
-  # Enable and start Suricata
-  systemctl enable suricata
-  systemctl start suricata
+  if [[ -z "$iface" ]]; then
+    log "WARNING: Cannot detect network interface, using eth0 as fallback"
+    iface="eth0"
+  fi
   
-  log "Suricata installed and started"
+  echo "$iface"
+}
+
+configure_suricata_yaml() {
+  local iface="$1"
+  local config_file="/etc/suricata/suricata.yaml"
+  
+  log "Configuring Suricata for interface: $iface"
+  
+  # Backup original config if exists
+  if [[ -f "$config_file" ]]; then
+    cp "$config_file" "${config_file}.backup.$(date +%s)" 2>/dev/null || true
+  fi
+  
+  # The default Ubuntu/Debian Suricata config already has af-packet section
+  # We just need to ensure the interface is set correctly
+  if grep -q "af-packet:" "$config_file" 2>/dev/null; then
+    log "Updating af-packet interface to $iface"
+    # Update the first interface: line under af-packet section
+    sed -i "/af-packet:/,/interface:/ s/interface: .*/interface: $iface/" "$config_file" 2>/dev/null || {
+      log "WARNING: Could not update interface with sed, trying alternative method"
+      # Alternative: just ensure there's an interface line
+      if ! grep -A 5 "af-packet:" "$config_file" | grep -q "interface:"; then
+        # Add interface line after af-packet:
+        sed -i "/af-packet:/a\  - interface: $iface" "$config_file" 2>/dev/null || true
+      fi
+    }
+  else
+    log "Adding af-packet section with interface $iface"
+    cat >> "$config_file" <<YAML
+
+# Added by LogMaster Agent installer
+af-packet:
+  - interface: $iface
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+YAML
+  fi
+  
+  # Ensure eve-log is enabled (usually it is by default)
+  if ! grep -q "eve-log:" "$config_file" 2>/dev/null; then
+    log "Enabling EVE JSON logging"
+    cat >> "$config_file" <<YAML
+
+# Added by LogMaster Agent installer  
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: /var/log/suricata/eve.json
+YAML
+  else
+    # Just ensure it's enabled
+    sed -i '/eve-log:/,/enabled:/ s/enabled: no/enabled: yes/' "$config_file" 2>/dev/null || true
+  fi
+  
+  # Fix permissions
+  mkdir -p /var/log/suricata
+  chmod 755 /var/log/suricata
+}
+
+install_suricata() {
+  log "Configuring Suricata"
+  
+  # Check if Suricata is already running and properly configured
+  if systemctl is-active --quiet suricata; then
+    log "Suricata is already running"
+    # Check if it has proper interface configured
+    if grep -A 5 "af-packet:" /etc/suricata/suricata.yaml 2>/dev/null | grep -q "interface:"; then
+      log "Suricata appears properly configured, skipping reconfiguration"
+      return 0
+    else
+      log "Suricata is running but may need interface configuration"
+      systemctl stop suricata 2>/dev/null || true
+    fi
+  else
+    log "Suricata is not running, will configure and start"
+  fi
+  
+  # Detect network interface
+  local iface
+  iface=$(get_default_interface)
+  log "Detected network interface: $iface"
+  
+  # Configure Suricata YAML
+  configure_suricata_yaml "$iface"
+  
+  # Test configuration (non-fatal if fails)
+  log "Testing Suricata configuration..."
+  if suricata -T -c /etc/suricata/suricata.yaml 2>/dev/null; then
+    log "✓ Suricata configuration is valid"
+  else
+    log "⚠ Suricata configuration test failed (may still work)"
+    # Show last few lines of error
+    suricata -T -c /etc/suricata/suricata.yaml 2>&1 | tail -5 || true
+  fi
+  
+  # Enable service
+  systemctl enable suricata 2>/dev/null || true
+  
+  # Start with retry logic
+  local max_attempts=3
+  local attempt=1
+  while [[ $attempt -le $max_attempts ]]; do
+    log "Starting Suricata (attempt $attempt/$max_attempts)..."
+    if systemctl start suricata 2>/dev/null; then
+      sleep 2
+      if systemctl is-active --quiet suricata; then
+        log "✓ Suricata started successfully"
+        return 0
+      fi
+    fi
+    
+    if [[ $attempt -lt $max_attempts ]]; then
+      log "Suricata failed to start, retrying..."
+      journalctl -u suricata -n 10 --no-pager 2>/dev/null | tail -5 || true
+      sleep 2
+    fi
+    attempt=$((attempt + 1))
+  done
+  
+  log "⚠ Suricata may not have started correctly"
+  log "Check status with: systemctl status suricata"
+  log "Check logs with: journalctl -u suricata -n 50"
+  return 0  # Don't fail the entire installation
 }
 
 setup_sudoers() {
