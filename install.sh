@@ -90,7 +90,7 @@ install_suricata() {
 setup_sudoers() {
   log "Configuring sudoers for agent"
   cat <<'SUDOERS' > /etc/sudoers.d/logmaster-agent
-logmaster-agent ALL=(ALL) NOPASSWD:/usr/bin/apt-get,/usr/bin/apt,/usr/bin/systemctl,/usr/bin/suricata-update,/usr/bin/suricata
+logmaster-agent ALL=(ALL) NOPASSWD:/usr/bin/apt-get,/usr/bin/apt,/usr/bin/systemctl,/usr/bin/suricata-update,/usr/bin/suricata,/usr/bin/mkdir,/usr/bin/cp,/usr/bin/chmod,/usr/bin/chown
 SUDOERS
   chmod 440 /etc/sudoers.d/logmaster-agent
 }
