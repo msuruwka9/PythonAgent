@@ -151,7 +151,8 @@ def install_suricata(distro: str) -> None:
 
 def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
                        eve_path: str = "/var/log/suricata/eve.json") -> None:
-    LOGGER.info("Configuring Suricata logging and network interface (%s)", config_path)
+    """Configure Suricata using systemd override instead of editing main config."""
+    LOGGER.info("Configuring Suricata for LogMaster")
     config_file = Path(config_path)
     
     # Verify config exists (should exist after apt install)
@@ -160,103 +161,59 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
             f"Suricata config not found at {config_path}. "
             "Ensure 'apt-get install suricata' completed successfully."
         )
-
-    content = config_file.read_text(encoding="utf-8")
     
+    LOGGER.info("Suricata config file exists: %s", config_path)
+
     # Detect network interface
     try:
         interface = detect_network_interface()
-        LOGGER.info("Configuring Suricata to monitor interface: %s", interface)
+        LOGGER.info("Detected primary network interface: %s", interface)
     except Exception as exc:
-        LOGGER.error("Failed to detect network interface: %s", exc)
-        raise
-
-    # Configure af-packet interface
-    # Look for af-packet section and update interface
-    af_packet_pattern = r'(af-packet:\s*\n(?:\s+-\s+interface:)[^\n]*)'
-    if re.search(r'af-packet:', content):
-        # Replace existing af-packet interface configuration
-        content = re.sub(
-            r'(\s+interface:\s+)\S+',
-            rf'\1{interface}',
-            content,
-            count=1
-        )
-        LOGGER.info("Updated af-packet interface to %s", interface)
-    else:
-        # If no af-packet section exists, add basic configuration
-        af_packet_config = f"""
-# LogMaster Agent: AF_PACKET configuration
-af-packet:
-  - interface: {interface}
-    cluster-id: 99
-    cluster-type: cluster_flow
-    defrag: yes
-    use-mmap: yes
-    tpacket-v3: yes
-"""
-        content += af_packet_config
-        LOGGER.info("Added af-packet configuration for %s", interface)
-    
-    # Update default-rule-path to use suricata-update managed rules
-    if "default-rule-path:" in content:
-        content = re.sub(
-            r'default-rule-path:\s*.*',
-            'default-rule-path: /var/lib/suricata/rules',
-            content
-        )
-        LOGGER.info("Updated rule path to /var/lib/suricata/rules")
-    
-    # Ensure EVE JSON logging is enabled
-    # Look for eve-log section and ensure it's enabled
-    if re.search(r'eve-log:', content):
-        # Make sure enabled is set to yes
-        content = re.sub(
-            r'(eve-log:.*?enabled:\s*)\S+',
-            r'\1yes',
-            content,
-            flags=re.DOTALL
-        )
-        # Update filetype to regular if not set
-        if 'filetype:' not in content or re.search(r'filetype:\s*regular', content):
-            pass  # Already correct
-        else:
-            content = re.sub(
-                r'(eve-log:.*?filetype:\s*)\S+',
-                r'\1regular',
-                content,
-                flags=re.DOTALL
-            )
-        LOGGER.info("Enabled EVE JSON logging")
+        LOGGER.warning("Failed to detect network interface: %s. Will use default.", exc)
+        interface = "eth0"  # Default fallback
     
     # Ensure log directory exists
     eve_log_dir = Path(eve_path).parent
-    eve_log_dir.mkdir(parents=True, exist_ok=True)
+    run_command(["mkdir", "-p", str(eve_log_dir)])
     LOGGER.info("Ensured EVE log directory exists: %s", eve_log_dir)
     
-    # Write updated configuration
-    config_file.write_text(content, encoding="utf-8")
+    # Create systemd override to set interface via command line
+    # This is cleaner than editing the main YAML file
+    systemd_override_dir = Path("/etc/systemd/system/suricata.service.d")
+    run_command(["mkdir", "-p", str(systemd_override_dir)])
     
-    # Set proper permissions for Suricata
+    override_content = f"""[Service]
+# LogMaster Agent: Override interface
+ExecStart=
+ExecStart=/usr/bin/suricata -c /etc/suricata/suricata.yaml -i {interface} --user suricata --group suricata --pidfile /run/suricata.pid
+"""
+    
+    # Write override file using temporary file and sudo
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as tmp:
+        tmp.write(override_content)
+        tmp_path = tmp.name
+    
+    override_file = systemd_override_dir / "logmaster.conf"
     try:
-        subprocess.run(
-            ["chmod", "644", str(config_file)],
-            check=True,
-            capture_output=True
-        )
-        # Ensure log directory is writable by suricata
-        subprocess.run(
-            ["chown", "-R", "root:root", str(eve_log_dir)],
-            check=True,
-            capture_output=True
-        )
-        subprocess.run(
-            ["chmod", "-R", "755", str(eve_log_dir)],
-            check=True,
-            capture_output=True
-        )
-    except subprocess.CalledProcessError as exc:
-        LOGGER.warning("Failed to set permissions: %s", exc)
+        run_command(["cp", tmp_path, str(override_file)])
+        run_command(["chmod", "644", str(override_file)])
+        LOGGER.info("Created systemd override: %s", override_file)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+    
+    # Reload systemd to apply changes
+    run_command(["systemctl", "daemon-reload"])
+    
+    # Verify EVE JSON logging is enabled in default config
+    content = config_file.read_text(encoding="utf-8")
+    if "eve-log:" in content and "enabled: yes" in content:
+        LOGGER.info("EVE JSON logging is already enabled in default config")
+    else:
+        LOGGER.warning("EVE JSON logging may not be enabled. Check %s manually.", config_path)
     
     LOGGER.info("Suricata configuration completed successfully")
 
