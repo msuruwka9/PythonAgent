@@ -1,8 +1,8 @@
 {
   "server_guid": "__SERVER_GUID__",
-  "api_url": "__API_URL__",
-  "heartbeat_endpoint": "__API_URL__/api/agent/heartbeat",
-  "log_upload_endpoint": "__API_URL__/api/logupload/uploadlogfile",
+  "api_url": "__WEBSERVICE_URL__",
+  "heartbeat_endpoint": "__VM_INTEGRATION_URL__/api/agent/heartbeat",
+  "log_upload_endpoint": "__WEBSERVICE_URL__/api/logupload/uploadlogfile",
   "agent_version": "1.0.0",
   "heartbeat_interval_seconds": 60,
   "state_directory": "/var/lib/logmaster-agent",
