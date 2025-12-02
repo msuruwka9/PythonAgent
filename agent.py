@@ -166,9 +166,12 @@ def main() -> None:
     start_log_shipper(
         config["suricata"].get("eve_log_path", "/var/log/suricata/eve.json"),
         config.get("log_upload_endpoint"),
+        config["server_guid"],
         config["log_shipper"].get("batch_size", 100),
         config["log_shipper"].get("flush_interval_seconds", 30),
     )
+
+    LOGGER.info("Agent started successfully for server %s", config["server_guid"])
 
     while not stop_event.is_set():
         time.sleep(1)

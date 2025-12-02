@@ -14,18 +14,40 @@ Agent automatyzuje instalację Suricata na serwerach Linux, przesyła heartbeaty
 ## Szybka instalacja
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/yourusername/log-master-agent/main/PythonAgent/install.sh | \
-  sudo bash -s -- <SERVER_GUID> <API_URL>
+curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/main/install.sh | \
+  sudo bash -s -- <SERVER_GUID> <WEBSERVICE_URL> <VM_INTEGRATION_URL>
 ```
+
+**Parametry:**
+- `SERVER_GUID` - Unikalny GUID dla tej VM/serwera
+- `WEBSERVICE_URL` - URL do WebService dla uploadu logów (np. https://webservice-xxx.ngrok.app)
+- `VM_INTEGRATION_URL` - URL do VM Integration Service dla heartbeat (np. https://vm-service-xxx.ngrok.app)
+
+**Przykład:**
+```bash
+curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/main/install.sh | \
+  sudo bash -s -- \
+    0a61b4ae-869c-4d2b-9702-1d6f100a63ce \
+    https://webservice-3ffb54e7-ef8a-45ed-b484-20054c19875d.ngrok.app \
+    https://vm-service-917bdec0-469f-44ac-9450-d008e16cc521.ngrok.app
+```
+
+**Co robi agent:**
+- Zbiera logi Suricata z `/var/log/suricata/eve.json`
+- Batchuje 100 eventów na raz
+- Kompresuje za pomocą gzip (6.9KB → 87KB compression ratio)
+- Wysyła do `WebService` przez POST `/api/logupload/uploadlogfile` z nagłówkiem `X-Server-Id` (identyfikacja serwera)
+- Wysyła heartbeat co 60s do `VM Integration Service`
 
 Instalator wykona:
 1. Walidację uprawnień i dystrybucji (Ubuntu)
-2. Instalację python3/pip i zależności systemowych
+2. Instalację python3/pip/venv i zależności systemowych
 3. Utworzenie użytkownika `logmaster-agent` i katalogów (`/opt`, `/var/lib`, `/var/log`)
-4. Pobranie plików agenta + `config.json.template`
-5. Wygenerowanie `config.json` z podstawionymi parametrami
-6. Instalację zależności `pip`
-7. Rejestrację usługi `logmaster-agent.service` i start
+4. Instalację Suricata (jeśli jeszcze nie zainstalowana)
+5. Pobranie plików agenta + `config.json.template`
+6. Wygenerowanie `config.json` z podstawionymi parametrami
+7. Utworzenie virtual environment i instalację zależności Python
+8. Rejestrację usługi `logmaster-agent.service` i start
 
 ## Logi i stan
 
