@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -38,11 +39,30 @@ def detect_distro() -> str:
 
 
 def run_command(command: list[str], sudo: bool = True) -> None:
+    """Execute a shell command with optional sudo."""
     # Don't use sudo if we're already root (UID 0)
     needs_sudo = sudo and os.geteuid() != 0 and command[0] != "sudo"
     full_cmd = ["sudo"] + command if needs_sudo else command
     LOGGER.debug("Executing: %s", " ".join(full_cmd))
-    subprocess.run(full_cmd, check=True, capture_output=True, text=True)
+    
+    try:
+        result = subprocess.run(
+            full_cmd, 
+            check=True, 
+            capture_output=True, 
+            text=True
+        )
+        if result.stdout:
+            LOGGER.debug("Command stdout: %s", result.stdout.strip())
+        if result.stderr:
+            LOGGER.debug("Command stderr: %s", result.stderr.strip())
+    except subprocess.CalledProcessError as exc:
+        LOGGER.error("Command failed: %s", " ".join(full_cmd))
+        if exc.stdout:
+            LOGGER.error("stdout: %s", exc.stdout.strip())
+        if exc.stderr:
+            LOGGER.error("stderr: %s", exc.stderr.strip())
+        raise
 
 
 def install_suricata(distro: str) -> None:
@@ -94,17 +114,28 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
 
 
 def enable_community_rules() -> None:
+    """Enable ET/Open ruleset and update Suricata rules."""
     LOGGER.info("Updating Suricata community rules and enabling ET Open")
     try:
         # Update sources list
+        LOGGER.info("Running suricata-update update-sources...")
         run_command(["suricata-update", "update-sources"])
+        
         # Enable ET/Open ruleset explicitly
+        LOGGER.info("Enabling et/open source...")
         run_command(["suricata-update", "enable-source", "et/open"])
+        
         # Update and download rules
+        LOGGER.info("Downloading rules with suricata-update...")
         run_command(["suricata-update"])
+        
         LOGGER.info("ET Open rules successfully installed and enabled")
     except subprocess.CalledProcessError as exc:
         LOGGER.error("Failed to enable ET Open rules: %s", exc)
+        LOGGER.error("Command output: %s", exc.output if hasattr(exc, 'output') else 'N/A')
+        raise
+    except Exception as exc:
+        LOGGER.error("Unexpected error during rule update: %s", exc)
         raise
 
 
