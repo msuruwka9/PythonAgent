@@ -115,8 +115,13 @@ render_config() {
 
 install_python_dependencies() {
   log "Installing Python dependencies"
-  python3 -m pip install --upgrade pip
-  python3 -m pip install --no-cache-dir -r "${INSTALL_DIR}/requirements.txt"
+  # Create virtual environment
+  python3 -m venv "${INSTALL_DIR}/venv"
+  # Install dependencies in venv
+  "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip
+  "${INSTALL_DIR}/venv/bin/pip" install --no-cache-dir -r "${INSTALL_DIR}/requirements.txt"
+  # Fix permissions
+  chown -R "${AGENT_USER}:${AGENT_GROUP}" "${INSTALL_DIR}/venv"
 }
 
 install_service() {
@@ -135,7 +140,7 @@ Group=${AGENT_GROUP}
 WorkingDirectory=${INSTALL_DIR}
 Environment=PYTHONUNBUFFERED=1
 Environment=API_URL=${api_url}
-ExecStart=${PYTHON_BIN} ${INSTALL_DIR}/agent.py --config ${INSTALL_DIR}/config.json
+ExecStart=${INSTALL_DIR}/venv/bin/python3 ${INSTALL_DIR}/agent.py --config ${INSTALL_DIR}/config.json
 Restart=always
 RestartSec=10
 StandardOutput=append:${LOG_DIR}/agent.log
