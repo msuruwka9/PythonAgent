@@ -16,11 +16,20 @@ log() {
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh <ServerGuid> <ApiUrl> [AgentSourceBase]
+Usage: install.sh <ServerGuid> <WebServiceUrl> <VMIntegrationUrl> [AgentSourceBase]
+
+Arguments:
+  ServerGuid         - Unique GUID for this VM/server
+  WebServiceUrl      - URL for file uploads (e.g., https://webservice-xxx.ngrok.app)
+  VMIntegrationUrl   - URL for heartbeat/registration (e.g., https://vm-service-xxx.ngrok.app)
+  AgentSourceBase    - (Optional) Base URL for agent files
 
 Example:
-  curl -sfL https://raw.githubusercontent.com/yourusername/log-master-agent/main/PythonAgent/install.sh | \
-    sudo bash -s -- 00000000-0000-0000-0000-000000000000 https://logmaster.example.com
+  curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/main/install.sh | \
+    sudo bash -s -- \
+      00000000-0000-0000-0000-000000000000 \
+      https://webservice-xxx.ngrok.app \
+      https://vm-service-xxx.ngrok.app
 USAGE
 }
 
@@ -94,10 +103,12 @@ fetch_agent_files() {
 
 render_config() {
   local server_guid="$1"
-  local api_url="$2"
+  local webservice_url="$2"
+  local vm_integration_url="$3"
   log "Generating config.json"
   sed "s#__SERVER_GUID__#${server_guid}#g" "${INSTALL_DIR}/config.json.template" | \
-    sed "s#__API_URL__#${api_url}#g" > "${INSTALL_DIR}/config.json"
+    sed "s#__WEBSERVICE_URL__#${webservice_url}#g" | \
+    sed "s#__VM_INTEGRATION_URL__#${vm_integration_url}#g" > "${INSTALL_DIR}/config.json"
   chmod 640 "${INSTALL_DIR}/config.json"
   chown "${AGENT_USER}:${AGENT_GROUP}" "${INSTALL_DIR}/config.json"
 }
@@ -139,7 +150,7 @@ SERVICE
 }
 
 main() {
-  if [[ $# -lt 2 ]]; then
+  if [[ $# -lt 3 ]]; then
     usage
     exit 1
   fi
@@ -148,17 +159,18 @@ main() {
   assert_ubuntu
 
   local server_guid="$1"
-  local api_url="${2%/}"
-  local agent_base="${3:-$DEFAULT_AGENT_BASE}"
+  local webservice_url="${2%/}"
+  local vm_integration_url="${3%/}"
+  local agent_base="${4:-$DEFAULT_AGENT_BASE}"
 
   install_dependencies
   create_user_and_dirs
   install_suricata
   setup_sudoers
   fetch_agent_files "${agent_base}"
-  render_config "${server_guid}" "${api_url}"
+  render_config "${server_guid}" "${webservice_url}" "${vm_integration_url}"
   install_python_dependencies
-  install_service "${api_url}"
+  install_service "${vm_integration_url}"
 
   log "Installation finished. Check status with: systemctl status logmaster-agent"
 }

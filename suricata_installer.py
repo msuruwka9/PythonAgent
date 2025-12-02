@@ -38,7 +38,9 @@ def detect_distro() -> str:
 
 
 def run_command(command: list[str], sudo: bool = True) -> None:
-    full_cmd = ["sudo"] + command if sudo and command[0] != "sudo" else command
+    # Don't use sudo if we're already root (UID 0)
+    needs_sudo = sudo and os.geteuid() != 0 and command[0] != "sudo"
+    full_cmd = ["sudo"] + command if needs_sudo else command
     LOGGER.debug("Executing: %s", " ".join(full_cmd))
     subprocess.run(full_cmd, check=True, capture_output=True, text=True)
 

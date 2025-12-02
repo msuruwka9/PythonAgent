@@ -54,6 +54,12 @@ def send_heartbeat(config: dict[str, Any], status: str, message: str = "") -> No
         response = requests.post(endpoint, json=payload, timeout=15)
         response.raise_for_status()
         LOGGER.info("Heartbeat sent: %s", status)
+    except requests.HTTPError as exc:
+        # 404 means endpoint doesn't exist yet - that's OK for development
+        if exc.response.status_code == 404:
+            LOGGER.debug("Heartbeat endpoint not implemented (404) - skipping")
+        else:
+            LOGGER.warning("Failed to send heartbeat: %s", exc)
     except requests.RequestException as exc:
         LOGGER.warning("Failed to send heartbeat: %s", exc)
 
