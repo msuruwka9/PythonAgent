@@ -7,7 +7,9 @@ INSTALL_DIR="/opt/logmaster-agent"
 STATE_DIR="/var/lib/logmaster-agent"
 LOG_DIR="/var/log/logmaster-agent"
 SERVICE_FILE="/etc/systemd/system/logmaster-agent.service"
-DEFAULT_AGENT_BASE="https://raw.githubusercontent.com/msuruwka9/PythonAgent/main"
+# Default to main branch, but can be overridden with 4th parameter or AGENT_BRANCH env var
+DEFAULT_BRANCH="${AGENT_BRANCH:-main}"
+DEFAULT_AGENT_BASE="https://raw.githubusercontent.com/msuruwka9/PythonAgent/${DEFAULT_BRANCH}"
 PYTHON_BIN="/usr/bin/python3"
 
 log() {
@@ -24,9 +26,19 @@ Arguments:
   VMIntegrationUrl   - URL for heartbeat/registration (e.g., https://vm-service-xxx.ngrok.app)
   AgentSourceBase    - (Optional) Base URL for agent files
 
-Example:
+Environment:
+  AGENT_BRANCH       - (Optional) Git branch to use (default: main)
+
+Example (using main branch):
   curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/main/install.sh | \
     sudo bash -s -- \
+      00000000-0000-0000-0000-000000000000 \
+      https://webservice-xxx.ngrok.app \
+      https://vm-service-xxx.ngrok.app
+
+Example (using custom branch):
+  curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/my-branch/install.sh | \
+    sudo AGENT_BRANCH=my-branch bash -s -- \
       00000000-0000-0000-0000-000000000000 \
       https://webservice-xxx.ngrok.app \
       https://vm-service-xxx.ngrok.app
