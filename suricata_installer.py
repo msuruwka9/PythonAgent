@@ -172,10 +172,12 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
         LOGGER.warning("Failed to detect network interface: %s. Will use default.", exc)
         interface = "eth0"  # Default fallback
     
-    # Ensure log directory exists
+    # Ensure log directory exists with correct permissions
     eve_log_dir = Path(eve_path).parent
     run_command(["mkdir", "-p", str(eve_log_dir)])
-    LOGGER.info("Ensured EVE log directory exists: %s", eve_log_dir)
+    run_command(["chown", "-R", "suricata:suricata", str(eve_log_dir)])
+    run_command(["chmod", "755", str(eve_log_dir)])
+    LOGGER.info("Ensured EVE log directory exists with correct permissions: %s", eve_log_dir)
     
     # Create systemd override to set interface via command line
     # This is cleaner than editing the main YAML file
