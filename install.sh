@@ -84,13 +84,28 @@ install_suricata() {
   systemctl stop suricata 2>/dev/null || true
   systemctl disable suricata 2>/dev/null || true
   
+  # Create suricata user/group if not exists
+  if ! getent group suricata >/dev/null 2>&1; then
+    log "Creating suricata group"
+    groupadd --system suricata
+  fi
+  if ! getent passwd suricata >/dev/null 2>&1; then
+    log "Creating suricata user"
+    useradd --system --no-create-home --shell /usr/sbin/nologin -g suricata suricata
+  fi
+  
+  # Create and set permissions for Suricata log directory
+  mkdir -p /var/log/suricata
+  chown -R suricata:suricata /var/log/suricata
+  chmod 755 /var/log/suricata
+  
   log "Suricata packages installed (service not started yet)"
 }
 
 setup_sudoers() {
   log "Configuring sudoers for agent"
   cat <<'SUDOERS' > /etc/sudoers.d/logmaster-agent
-logmaster-agent ALL=(ALL) NOPASSWD:/usr/bin/apt-get,/usr/bin/apt,/usr/bin/systemctl,/usr/bin/suricata-update,/usr/bin/suricata,/usr/bin/mkdir,/usr/bin/cp,/usr/bin/chmod,/usr/bin/chown
+logmaster-agent ALL=(ALL) NOPASSWD:/usr/bin/apt-get,/usr/bin/apt,/usr/bin/systemctl,/usr/bin/suricata-update,/usr/bin/suricata,/usr/bin/mkdir,/usr/bin/cp,/usr/bin/chmod,/usr/bin/chown,/usr/sbin/groupadd,/usr/sbin/useradd,/usr/bin/getent
 SUDOERS
   chmod 440 /etc/sudoers.d/logmaster-agent
 }

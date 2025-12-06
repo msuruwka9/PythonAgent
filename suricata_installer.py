@@ -108,11 +108,18 @@ def detect_distro() -> str:
     raise RuntimeError("Unable to determine distro ID")
 
 
-def run_command(command: list[str], sudo: bool = True) -> None:
-    """Execute a shell command with optional sudo."""
-    # Don't use sudo if we're already root (UID 0)
-    needs_sudo = sudo and os.geteuid() != 0 and command[0] != "sudo"
-    full_cmd = ["sudo"] + command if needs_sudo else command
+def run_command(command: list[str], sudo: bool = False) -> None:
+    """Execute a shell command with optional sudo.
+    
+    By default, assumes the script is already running with appropriate privileges.
+    Set sudo=True only if you explicitly need sudo escalation.
+    """
+    # Only add sudo if explicitly requested AND we're not already root
+    if sudo and os.geteuid() != 0 and command[0] != "sudo":
+        full_cmd = ["sudo"] + command
+    else:
+        full_cmd = command
+    
     LOGGER.debug("Executing: %s", " ".join(full_cmd))
     
     try:
@@ -147,7 +154,7 @@ def ensure_suricata_user() -> None:
         )
         if result.returncode != 0:
             LOGGER.info("Creating suricata group...")
-            run_command(["groupadd", "--system", "suricata"])
+            run_command(["groupadd", "--system", "suricata"], sudo=True)
         else:
             LOGGER.debug("suricata group already exists")
         
@@ -164,7 +171,7 @@ def ensure_suricata_user() -> None:
                 "useradd", "--system", "--no-create-home",
                 "--shell", "/usr/sbin/nologin",
                 "-g", "suricata", "suricata"
-            ])
+            ], sudo=True)
         else:
             LOGGER.debug("suricata user already exists")
     except Exception as exc:
@@ -175,13 +182,13 @@ def ensure_suricata_user() -> None:
 def install_suricata(distro: str) -> None:
     LOGGER.info("Installing Suricata packages (%s)", distro)
     if distro in {"ubuntu", "debian"}:
-        run_command(["apt-get", "update"])
-        run_command(["apt-get", "install", "-y", "suricata", "suricata-update"])
+        run_command(["apt-get", "update"], sudo=True)
+        run_command(["apt-get", "install", "-y", "suricata", "suricata-update"], sudo=True)
     elif distro in {"centos", "rhel", "rocky", "alma"}:
-        run_command(["yum", "install", "-y", "epel-release"])
-        run_command(["yum", "install", "-y", "suricata", "suricata-update"])
+        run_command(["yum", "install", "-y", "epel-release"], sudo=True)
+        run_command(["yum", "install", "-y", "suricata", "suricata-update"], sudo=True)
     elif distro == "fedora":
-        run_command(["dnf", "install", "-y", "suricata", "suricata-update"])
+        run_command(["dnf", "install", "-y", "suricata", "suricata-update"], sudo=True)
     else:
         raise RuntimeError(f"Unsupported distro {distro}")
     
@@ -214,15 +221,15 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
     
     # Ensure log directory exists with correct permissions
     eve_log_dir = Path(eve_path).parent
-    run_command(["mkdir", "-p", str(eve_log_dir)])
+    run_command(["mkdir", "-p", str(eve_log_dir)], sudo=True)
     
     # Ensure suricata user exists before setting ownership
     ensure_suricata_user()
     
     # Set ownership to suricata user
     try:
-        run_command(["chown", "-R", "suricata:suricata", str(eve_log_dir)])
-        run_command(["chmod", "755", str(eve_log_dir)])
+        run_command(["chown", "-R", "suricata:suricata", str(eve_log_dir)], sudo=True)
+        run_command(["chmod", "755", str(eve_log_dir)], sudo=True)
         LOGGER.info("Ensured EVE log directory exists with correct permissions: %s", eve_log_dir)
     except subprocess.CalledProcessError as exc:
         LOGGER.warning("Failed to set ownership to suricata:suricata: %s. Continuing anyway.", exc)
@@ -231,7 +238,7 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
     # Create systemd override to set interface via command line
     # This is cleaner than editing the main YAML file
     systemd_override_dir = Path("/etc/systemd/system/suricata.service.d")
-    run_command(["mkdir", "-p", str(systemd_override_dir)])
+    run_command(["mkdir", "-p", str(systemd_override_dir)], sudo=True)
     
     override_content = f"""[Service]
 # LogMaster Agent: Override interface
@@ -247,8 +254,8 @@ ExecStart=/usr/bin/suricata -c /etc/suricata/suricata.yaml -i {interface} --user
     
     override_file = systemd_override_dir / "logmaster.conf"
     try:
-        run_command(["cp", tmp_path, str(override_file)])
-        run_command(["chmod", "644", str(override_file)])
+        run_command(["cp", tmp_path, str(override_file)], sudo=True)
+        run_command(["chmod", "644", str(override_file)], sudo=True)
         LOGGER.info("Created systemd override: %s", override_file)
     finally:
         try:
@@ -257,7 +264,7 @@ ExecStart=/usr/bin/suricata -c /etc/suricata/suricata.yaml -i {interface} --user
             pass
     
     # Reload systemd to apply changes
-    run_command(["systemctl", "daemon-reload"])
+    run_command(["systemctl", "daemon-reload"], sudo=True)
     
     # Verify EVE JSON logging is enabled in default config
     content = config_file.read_text(encoding="utf-8")
@@ -275,15 +282,15 @@ def enable_community_rules() -> None:
     try:
         # Update sources list
         LOGGER.info("Running suricata-update update-sources...")
-        run_command(["suricata-update", "update-sources"])
+        run_command(["suricata-update", "update-sources"], sudo=True)
         
         # Enable ET/Open ruleset explicitly
         LOGGER.info("Enabling et/open source...")
-        run_command(["suricata-update", "enable-source", "et/open"])
+        run_command(["suricata-update", "enable-source", "et/open"], sudo=True)
         
         # Update and download rules
         LOGGER.info("Downloading rules with suricata-update...")
-        run_command(["suricata-update"])
+        run_command(["suricata-update"], sudo=True)
         
         LOGGER.info("ET Open rules successfully installed and enabled")
     except subprocess.CalledProcessError as exc:
@@ -302,7 +309,7 @@ def start_suricata(service_name: str = "suricata") -> None:
     try:
         LOGGER.info("Validating Suricata configuration...")
         result = subprocess.run(
-            ["suricata", "-T", "-c", "/etc/suricata/suricata.yaml"],
+            ["sudo", "suricata", "-T", "-c", "/etc/suricata/suricata.yaml"],
             capture_output=True,
             text=True,
             check=False,
@@ -322,7 +329,7 @@ def start_suricata(service_name: str = "suricata") -> None:
     # Stop service if running
     try:
         subprocess.run(
-            ["systemctl", "stop", service_name],
+            ["sudo", "systemctl", "stop", service_name],
             capture_output=True,
             check=False,
             timeout=30
@@ -331,8 +338,8 @@ def start_suricata(service_name: str = "suricata") -> None:
         LOGGER.debug("Error stopping service (may not be running): %s", exc)
     
     # Enable and start
-    run_command(["systemctl", "enable", service_name])
-    run_command(["systemctl", "start", service_name])
+    run_command(["systemctl", "enable", service_name], sudo=True)
+    run_command(["systemctl", "start", service_name], sudo=True)
     
     # Wait a moment and verify it's running
     import time
