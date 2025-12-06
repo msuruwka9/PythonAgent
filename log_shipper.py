@@ -71,7 +71,7 @@ class EveLogHandler(FileSystemEventHandler):
             self.process_new_lines()
 
 
-def ship_batch(events: list[dict[str, Any]], endpoint: str, retries: int = 3, max_size_mb: int = 200) -> None:
+def ship_batch(events: list[dict[str, Any]], endpoint: str, server_guid: str, retries: int = 3, max_size_mb: int = 200) -> None:
     """Ship batch with size limit and automatic splitting if needed."""
     if not events:
         return
@@ -88,8 +88,8 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, retries: int = 3, ma
             uncompressed_size_mb,
             len(events),
         )
-        ship_batch(events[:mid], endpoint, retries, max_size_mb)
-        ship_batch(events[mid:], endpoint, retries, max_size_mb)
+        ship_batch(events[:mid], endpoint, server_guid, retries, max_size_mb)
+        ship_batch(events[mid:], endpoint, server_guid, retries, max_size_mb)
         return
 
     compressed = gzip.compress(payload)
@@ -111,11 +111,12 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, retries: int = 3, ma
                 headers={
                     "Content-Type": "application/json",
                     "Content-Encoding": "gzip",
+                    "X-Server-Id": server_guid,
                 },
                 timeout=60,  # Increased timeout for large batches
             )
             response.raise_for_status()
-            LOGGER.info("Uploaded %s events (%.2f MB compressed)", len(events), compressed_size_mb)
+            LOGGER.info("Uploaded %s events (%.2f MB compressed) for server %s", len(events), compressed_size_mb, server_guid)
             return
         except requests.RequestException as exc:
             LOGGER.warning("Failed to upload events (attempt %s/%s): %s", attempt, retries, exc)
@@ -126,6 +127,7 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, retries: int = 3, ma
 
 def worker_loop(event_queue: "queue.Queue[dict[str, Any]]",
                 endpoint: str,
+                server_guid: str,
                 batch_size: int,
                 flush_interval: int,
                 stop_event: threading.Event) -> None:
@@ -156,17 +158,18 @@ def worker_loop(event_queue: "queue.Queue[dict[str, Any]]",
         if should_flush:
             if buffer_size_mb >= max_buffer_size_mb:
                 LOGGER.debug("Flushing early due to size: %.2f MB estimated", buffer_size_mb)
-            ship_batch(buffer, endpoint)
+            ship_batch(buffer, endpoint, server_guid)
             buffer.clear()
             estimated_buffer_size = 0
             last_flush = time.monotonic()
 
     if buffer:
-        ship_batch(buffer, endpoint)
+        ship_batch(buffer, endpoint, server_guid)
 
 
 def start_log_shipper(eve_log: str,
                       endpoint: str,
+                      server_guid: str,
                       batch_size: int,
                       flush_interval: int) -> None:
     if not endpoint:
@@ -191,9 +194,11 @@ def start_log_shipper(eve_log: str,
 
     worker = threading.Thread(
         target=worker_loop,
-        args=(event_queue, endpoint, batch_size, flush_interval, stop_event),
+        args=(event_queue, endpoint, server_guid, batch_size, flush_interval, stop_event),
         daemon=True,
     )
     worker.start()
+
+    LOGGER.info("Log shipper started for server %s", server_guid)
 
     return stop_event, observer
