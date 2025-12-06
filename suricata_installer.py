@@ -135,6 +135,43 @@ def run_command(command: list[str], sudo: bool = True) -> None:
         raise
 
 
+def ensure_suricata_user() -> None:
+    """Ensure suricata user and group exist."""
+    try:
+        # Check if suricata group exists
+        result = subprocess.run(
+            ["getent", "group", "suricata"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            LOGGER.info("Creating suricata group...")
+            run_command(["groupadd", "--system", "suricata"])
+        else:
+            LOGGER.debug("suricata group already exists")
+        
+        # Check if suricata user exists
+        result = subprocess.run(
+            ["getent", "passwd", "suricata"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            LOGGER.info("Creating suricata user...")
+            run_command([
+                "useradd", "--system", "--no-create-home",
+                "--shell", "/usr/sbin/nologin",
+                "-g", "suricata", "suricata"
+            ])
+        else:
+            LOGGER.debug("suricata user already exists")
+    except Exception as exc:
+        LOGGER.warning("Failed to ensure suricata user/group: %s", exc)
+        # Don't fail here - we'll try to continue without it
+
+
 def install_suricata(distro: str) -> None:
     LOGGER.info("Installing Suricata packages (%s)", distro)
     if distro in {"ubuntu", "debian"}:
@@ -147,6 +184,9 @@ def install_suricata(distro: str) -> None:
         run_command(["dnf", "install", "-y", "suricata", "suricata-update"])
     else:
         raise RuntimeError(f"Unsupported distro {distro}")
+    
+    # Ensure suricata user/group exist after installation
+    ensure_suricata_user()
 
 
 def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
@@ -175,9 +215,18 @@ def configure_suricata(config_path: str = "/etc/suricata/suricata.yaml",
     # Ensure log directory exists with correct permissions
     eve_log_dir = Path(eve_path).parent
     run_command(["mkdir", "-p", str(eve_log_dir)])
-    run_command(["chown", "-R", "suricata:suricata", str(eve_log_dir)])
-    run_command(["chmod", "755", str(eve_log_dir)])
-    LOGGER.info("Ensured EVE log directory exists with correct permissions: %s", eve_log_dir)
+    
+    # Ensure suricata user exists before setting ownership
+    ensure_suricata_user()
+    
+    # Set ownership to suricata user
+    try:
+        run_command(["chown", "-R", "suricata:suricata", str(eve_log_dir)])
+        run_command(["chmod", "755", str(eve_log_dir)])
+        LOGGER.info("Ensured EVE log directory exists with correct permissions: %s", eve_log_dir)
+    except subprocess.CalledProcessError as exc:
+        LOGGER.warning("Failed to set ownership to suricata:suricata: %s. Continuing anyway.", exc)
+        # Continue even if chown fails - the directory still exists
     
     # Create systemd override to set interface via command line
     # This is cleaner than editing the main YAML file
