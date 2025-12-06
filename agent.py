@@ -112,11 +112,18 @@ def orchestrate_installation(config: dict[str, Any]) -> str:
         enable_community_rules()
         
         LOGGER.info("Starting Suricata service...")
-        start_suricata(config["suricata"].get("service_name", "suricata"))
-        
-        send_heartbeat(config, SuricataInstallationStatus.CONFIGURED, "Suricata configured successfully")
-        LOGGER.info("Suricata installation completed successfully")
-        return SuricataInstallationStatus.CONFIGURED
+        try:
+            start_suricata(config["suricata"].get("service_name", "suricata"))
+            send_heartbeat(config, SuricataInstallationStatus.CONFIGURED, "Suricata configured successfully")
+            LOGGER.info("Suricata installation completed successfully")
+            return SuricataInstallationStatus.CONFIGURED
+        except Exception as suricata_exc:
+            LOGGER.error("Failed to start Suricata service: %s", suricata_exc)
+            LOGGER.warning("Suricata is installed and configured but not running")
+            LOGGER.warning("You may need to start it manually with: sudo systemctl start suricata")
+            send_heartbeat(config, SuricataInstallationStatus.CONFIGURED, "Suricata installed but not started")
+            # Return configured status anyway - the service is installed
+            return SuricataInstallationStatus.CONFIGURED
         
     except Exception as exc:
         error_msg = f"Suricata installation failed: {exc}"
