@@ -98,7 +98,7 @@ fi
 
 # Download updated agent files
 log "Downloading updated agent files..."
-REPO_BASE="https://raw.githubusercontent.com/msuruwka9/PythonAgent/main"
+REPO_BASE="https://raw.githubusercontent.com/msuruwka9/PythonAgent/log_upload_refactor_add_serverid"
 
 cd "${AGENT_DIR}"
 
