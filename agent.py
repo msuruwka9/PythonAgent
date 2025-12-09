@@ -151,6 +151,24 @@ def main() -> None:
         sys.exit(1)
 
     config = load_config(config_path)
+    
+    # Validate server_guid is present and valid
+    server_guid = config.get("server_guid", "")
+    if not server_guid or server_guid == "__SERVER_GUID__" or server_guid == "":
+        LOGGER.error("server_guid is missing or not configured in %s. Agent cannot start without valid ServerId.", config_path)
+        LOGGER.error("Please ensure config.json contains a valid server_guid obtained from the LogMaster registration process.")
+        sys.exit(1)
+    
+    try:
+        # Verify it's a valid GUID format
+        import uuid
+        uuid.UUID(server_guid)
+    except ValueError:
+        LOGGER.error("server_guid '%s' is not a valid GUID/UUID format. Agent cannot start.", server_guid)
+        sys.exit(1)
+    
+    LOGGER.info("Starting agent for server %s", server_guid)
+    
     install_status = orchestrate_installation(config)
 
     # Continue monitoring even if installation was skipped or partial

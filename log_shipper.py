@@ -75,6 +75,11 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, server_guid: str, re
     """Ship batch with size limit and automatic splitting if needed."""
     if not events:
         return
+    
+    # Validate server_guid is present
+    if not server_guid or server_guid == "":
+        LOGGER.error("Cannot ship batch: server_guid is missing or empty")
+        return
 
     # Check uncompressed size first
     payload = json.dumps(events).encode("utf-8")
@@ -111,18 +116,24 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, server_guid: str, re
                 headers={
                     "Content-Type": "application/json",
                     "Content-Encoding": "gzip",
-                    "X-Server-Id": server_guid,
+                    "X-LogMaster-ServerId": server_guid,
                 },
                 timeout=60,  # Increased timeout for large batches
             )
             response.raise_for_status()
             LOGGER.info("Uploaded %s events (%.2f MB compressed) for server %s", len(events), compressed_size_mb, server_guid)
             return
+        except requests.HTTPError as exc:
+            if exc.response.status_code == 400:
+                LOGGER.error("Server rejected batch: Invalid or unregistered ServerId %s - %s", server_guid, exc.response.text)
+                return  # Don't retry 400 errors - ServerId validation failed
+            LOGGER.warning("Failed to upload events (attempt %s/%s): HTTP %s - %s", attempt, retries, exc.response.status_code, exc)
+            time.sleep(attempt * 5)
         except requests.RequestException as exc:
             LOGGER.warning("Failed to upload events (attempt %s/%s): %s", attempt, retries, exc)
             time.sleep(attempt * 5)
 
-    LOGGER.error("Giving up after %s attempts uploading %s events", retries, len(events))
+    LOGGER.error("Giving up after %s attempts uploading %s events for server %s", retries, len(events), server_guid)
 
 
 def worker_loop(event_queue: "queue.Queue[dict[str, Any]]",
