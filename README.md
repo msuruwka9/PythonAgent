@@ -61,6 +61,37 @@ Instalator wykona:
 - Błędy: `/var/log/logmaster-agent/agent.err.log`
 - Offset logów Suricata: `/var/lib/logmaster-agent/offset.json`
 
+## Aktualizacja istniejącej instalacji
+
+Jeśli masz już zainstalowanego agenta w starszej wersji (bez wsparcia ServerId), użyj skryptu aktualizacyjnego:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/main/update.sh | \
+  sudo bash
+```
+
+Skrypt:
+- Utworzy backup obecnej konfiguracji
+- Zaktualizuje pliki Pythona do najnowszej wersji
+- Doda pole `server_guid` do konfiguracji (jeśli nie istnieje)
+- Zrestartuje serwis agenta
+
+**Szczegółowy przewodnik:** Zobacz [UPDATE_GUIDE.md](UPDATE_GUIDE.md)
+
+## Monitorowanie
+
+```bash
+# Status serwisu
+sudo systemctl status logmaster-agent
+
+# Logi na żywo
+sudo journalctl -u logmaster-agent -f
+
+# Ostatnie logi
+tail -f /var/log/logmaster-agent/agent.log
+```
+- Offset logów Suricata: `/var/lib/logmaster-agent/offset.json`
+
 ## Odinstalowanie
 
 ```bash
