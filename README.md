@@ -36,8 +36,14 @@ curl -sfL https://raw.githubusercontent.com/msuruwka9/PythonAgent/main/install.s
 - Zbiera logi Suricata z `/var/log/suricata/eve.json`
 - Batchuje 100 eventów na raz
 - Kompresuje za pomocą gzip (6.9KB → 87KB compression ratio)
-- Wysyła do `WebService` przez POST `/api/logupload/uploadlogfile` z nagłówkiem `X-Server-Id` (identyfikacja serwera)
+- Wysyła do `WebService` przez POST `/api/logupload/uploadlogfile` z nagłówkiem `X-LogMaster-ServerId` (identyfikacja serwera)
+- **Wymaga zarejestrowanego ServerId** - każdy batch logów musi mieć prawidłowy `server_guid` (UUID) zarejestrowany w systemie
 - Wysyła heartbeat co 60s do `VM Integration Service`
+
+**⚠️ Ważne wymagania:**
+- `server_guid` musi być poprawnym UUID/GUID otrzymanym podczas rejestracji serwera w LogMaster
+- WebService waliduje każdy request - odrzuca logi z niezarejestrowanym lub nieprawidłowym ServerId
+- Agent nie wystartuje jeśli `config.json` nie zawiera prawidłowego `server_guid`
 
 Instalator wykona:
 1. Walidację uprawnień i dystrybucji (Ubuntu)
