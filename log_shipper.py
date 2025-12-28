@@ -25,6 +25,7 @@ class EveLogHandler(FileSystemEventHandler):
         self.queue = event_queue
         self.offset = 0
         self._load_offset()
+        self._check_file_rotation()
         self._process_existing_lines()
 
     def _load_offset(self) -> None:
@@ -35,18 +36,49 @@ class EveLogHandler(FileSystemEventHandler):
             except json.JSONDecodeError:
                 self.offset = 0
 
+    def _check_file_rotation(self) -> None:
+        """Check if log file was rotated (offset > file size) and reset if needed."""
+        if not self.file_path.exists():
+            return
+        file_size = self.file_path.stat().st_size
+        if self.offset > file_size:
+            LOGGER.warning(
+                "Detected log rotation: offset (%d) > file size (%d). Resetting offset to 0.",
+                self.offset, file_size
+            )
+            self.offset = 0
+            self._save_offset()
+
     def _save_offset(self) -> None:
         STATE_FILE.write_text(json.dumps({"offset": self.offset}), encoding="utf-8")
 
     def _process_existing_lines(self) -> None:
         if not self.file_path.exists():
+            LOGGER.warning("EVE log file does not exist: %s", self.file_path)
             return
+        
+        # Get file size BEFORE opening to ensure accurate measurement
+        file_size = self.file_path.stat().st_size
+        
+        # Ensure offset doesn't exceed file size BEFORE seeking
+        if self.offset > file_size:
+            LOGGER.warning("Offset %d exceeds file size %d, resetting to 0", self.offset, file_size)
+            self.offset = 0
+            self._save_offset()
+        
+        LOGGER.info("Processing existing lines from offset %d, file size %d", self.offset, file_size)
+        lines_processed = 0
         with self.file_path.open("r", encoding="utf-8") as handle:
             handle.seek(self.offset)
             for line in handle:
                 self._enqueue_line(line)
-            self.offset = handle.tell()
-            self._save_offset()
+                lines_processed += 1
+        
+        # After processing, set offset to current file size (not handle.tell() which can be wrong)
+        new_file_size = self.file_path.stat().st_size
+        self.offset = new_file_size
+        self._save_offset()
+        LOGGER.info("Processed %d existing lines, new offset: %d", lines_processed, self.offset)
 
     def _enqueue_line(self, line: str) -> None:
         line = line.strip()
@@ -59,15 +91,31 @@ class EveLogHandler(FileSystemEventHandler):
             LOGGER.debug("Skipping invalid JSON line")
 
     def process_new_lines(self) -> None:
+        # Check for file rotation before processing
+        self._check_file_rotation()
+        
+        file_size = self.file_path.stat().st_size
+        
+        # Safety check
+        if self.offset > file_size:
+            LOGGER.warning("Offset %d > file size %d in process_new_lines, resetting", self.offset, file_size)
+            self.offset = 0
+            self._save_offset()
+        
         with self.file_path.open("r", encoding="utf-8") as handle:
             handle.seek(self.offset)
             for line in handle:
                 self._enqueue_line(line)
-            self.offset = handle.tell()
-            self._save_offset()
+        
+        # Use file stat for new offset, not handle.tell()
+        new_file_size = self.file_path.stat().st_size
+        self.offset = new_file_size
+        self._save_offset()
 
     def on_modified(self, event):  # type: ignore[override]
+        LOGGER.debug("File modified event: %s", event.src_path)
         if Path(event.src_path) == self.file_path:
+            LOGGER.debug("Processing new lines for %s", self.file_path)
             self.process_new_lines()
 
 
@@ -183,6 +231,9 @@ def start_log_shipper(eve_log: str,
                       server_guid: str,
                       batch_size: int,
                       flush_interval: int) -> None:
+    LOGGER.info("Starting log shipper: eve_log=%s, endpoint=%s, server_guid=%s, batch_size=%d, flush_interval=%d",
+                eve_log, endpoint, server_guid, batch_size, flush_interval)
+    
     if not endpoint:
         LOGGER.warning("Log upload endpoint is not configured; skipping log shipper")
         return
