@@ -119,15 +119,15 @@ class EveLogHandler(FileSystemEventHandler):
             self.process_new_lines()
 
 
-def ship_batch(events: list[dict[str, Any]], endpoint: str, server_guid: str, retries: int = 3, max_size_mb: int = 200) -> None:
-    """Ship batch with size limit and automatic splitting if needed."""
+def ship_batch(events: list[dict[str, Any]], endpoint: str, server_guid: str, retries: int = 3, max_size_mb: int = 200) -> bool:
+    """Ship batch with size limit and automatic splitting if needed. Returns True if successful."""
     if not events:
-        return
+        return True
     
     # Validate server_guid is present
     if not server_guid or server_guid == "":
         LOGGER.error("Cannot ship batch: server_guid is missing or empty")
-        return
+        return False
 
     # Check uncompressed size first
     payload = json.dumps(events).encode("utf-8")
@@ -141,9 +141,10 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, server_guid: str, re
             uncompressed_size_mb,
             len(events),
         )
-        ship_batch(events[:mid], endpoint, server_guid, retries, max_size_mb)
-        ship_batch(events[mid:], endpoint, server_guid, retries, max_size_mb)
-        return
+        result1 = ship_batch(events[:mid], endpoint, server_guid, retries, max_size_mb)
+        time.sleep(0.5)  # Rate limit between split batches
+        result2 = ship_batch(events[mid:], endpoint, server_guid, retries, max_size_mb)
+        return result1 and result2
 
     compressed = gzip.compress(payload)
     compressed_size_mb = len(compressed) / (1024 * 1024)
@@ -170,11 +171,11 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, server_guid: str, re
             )
             response.raise_for_status()
             LOGGER.info("Uploaded %s events (%.2f MB compressed) for server %s", len(events), compressed_size_mb, server_guid)
-            return
+            return True
         except requests.HTTPError as exc:
             if exc.response.status_code == 400:
                 LOGGER.error("Server rejected batch: Invalid or unregistered ServerId %s - %s", server_guid, exc.response.text)
-                return  # Don't retry 400 errors - ServerId validation failed
+                return False  # Don't retry 400 errors - ServerId validation failed
             LOGGER.warning("Failed to upload events (attempt %s/%s): HTTP %s - %s", attempt, retries, exc.response.status_code, exc)
             time.sleep(attempt * 5)
         except requests.RequestException as exc:
@@ -182,6 +183,7 @@ def ship_batch(events: list[dict[str, Any]], endpoint: str, server_guid: str, re
             time.sleep(attempt * 5)
 
     LOGGER.error("Giving up after %s attempts uploading %s events for server %s", retries, len(events), server_guid)
+    return False
 
 
 def worker_loop(event_queue: "queue.Queue[dict[str, Any]]",
@@ -194,6 +196,10 @@ def worker_loop(event_queue: "queue.Queue[dict[str, Any]]",
     last_flush = time.monotonic()
     estimated_buffer_size = 0  # Track approximate size in bytes
     max_buffer_size_mb = 150  # Start flushing earlier to avoid 200MB limit
+    
+    # Use larger batch size for catching up with backlog (10x normal)
+    catchup_batch_size = batch_size * 10  # e.g., 1000 instead of 100
+    min_delay_between_uploads = 0.2  # 200ms minimum between uploads to avoid rate limiting
 
     while not stop_event.is_set():
         try:
@@ -206,21 +212,31 @@ def worker_loop(event_queue: "queue.Queue[dict[str, Any]]",
 
         buffer_size_mb = estimated_buffer_size / (1024 * 1024)
         time_since_flush = time.monotonic() - last_flush
+        queue_size = event_queue.qsize()
+        
+        # Use larger batch size when queue is large (catching up with backlog)
+        effective_batch_size = catchup_batch_size if queue_size > 1000 else batch_size
         
         # Flush if: count limit OR size limit OR time limit
         should_flush = (
-            len(buffer) >= batch_size
+            len(buffer) >= effective_batch_size
             or buffer_size_mb >= max_buffer_size_mb
             or (buffer and time_since_flush >= flush_interval)
         )
         
         if should_flush:
+            if queue_size > 1000:
+                LOGGER.info("Catching up: queue has %d items, using batch size %d", queue_size, effective_batch_size)
             if buffer_size_mb >= max_buffer_size_mb:
                 LOGGER.debug("Flushing early due to size: %.2f MB estimated", buffer_size_mb)
+            
             ship_batch(buffer, endpoint, server_guid)
             buffer.clear()
             estimated_buffer_size = 0
             last_flush = time.monotonic()
+            
+            # Rate limit: wait between uploads to avoid overwhelming ngrok/server
+            time.sleep(min_delay_between_uploads)
 
     if buffer:
         ship_batch(buffer, endpoint, server_guid)
